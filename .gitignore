@@ -4,3 +4,4 @@
 !*.md
 !*.txt
 !*.ipynb
+!modules/*
