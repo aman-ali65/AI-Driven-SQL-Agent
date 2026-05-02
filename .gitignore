@@ -1,7 +1,0 @@
-*
-
-!*.py 
-!*.md
-!*.txt
-!*.ipynb
-!modules/*
