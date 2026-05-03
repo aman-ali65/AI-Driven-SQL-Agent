@@ -14,6 +14,8 @@ from flask import request, jsonify
 from werkzeug.utils import secure_filename
 
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "xls"}
+RAG_EXTENSIONS = {"pdf", "pptx", "ppt"}
+DB_EXTENSIONS = {"db", "sqlite"}
 
 
 class FileUploader:
@@ -39,6 +41,10 @@ class FileUploader:
     def allowed_file(self, filename: str) -> bool:
         """Returns True if file extension is CSV, XLSX, or XLS."""
         return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+    def table_name_for_file(self, filename: str) -> str:
+        """Returns the SQLite table name used for a CSV/Excel upload."""
+        return filename.rsplit(".", 1)[0].lower().replace("-", "_").replace(" ", "_")
 
     def clean_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -115,6 +121,47 @@ class FileUploader:
         except Exception:
             return []
 
+    def list_uploaded_files(self) -> list:
+        """
+        Returns files present in uploads/ so the sidebar can show the full
+        knowledge base, not only files already indexed or converted.
+        """
+        tables = set(self.list_tables())
+        files = []
+        for filename in sorted(os.listdir(self.upload_folder)):
+            path = os.path.join(self.upload_folder, filename)
+            if not os.path.isfile(path) or "." not in filename:
+                continue
+            ext = filename.rsplit(".", 1)[1].lower()
+            kind = "other"
+            table_name = None
+            imported = False
+            if ext in ALLOWED_EXTENSIONS:
+                kind = "table_file"
+                table_name = self.table_name_for_file(filename)
+                imported = table_name in tables
+                if not imported:
+                    try:
+                        df = self.read_file(path, ext)
+                        df = self.clean_column_names(df)
+                        self.save_to_db(df, table_name)
+                        tables.add(table_name)
+                        imported = True
+                    except Exception:
+                        imported = False
+            elif ext in RAG_EXTENSIONS:
+                kind = "rag_file"
+            elif ext in DB_EXTENSIONS:
+                kind = "database"
+            files.append({
+                "filename": filename,
+                "extension": ext,
+                "kind": kind,
+                "table_name": table_name,
+                "imported": imported,
+            })
+        return files
+
 
 class FileRoutes:
     """
@@ -138,6 +185,7 @@ class FileRoutes:
         """Binds routes. Call once at startup."""
         self.app.add_url_rule("/file/upload", "file_upload", self.upload, methods=["POST"])
         self.app.add_url_rule("/file/tables", "file_tables", self.tables, methods=["GET"])
+        self.app.add_url_rule("/file/uploads", "file_uploads", self.uploads, methods=["GET"])
 
     def upload(self):
         """
@@ -163,7 +211,7 @@ class FileRoutes:
         file.save(filepath)
 
         extension  = filename.rsplit(".", 1)[1].lower()
-        table_name = filename.rsplit(".", 1)[0].lower().replace("-", "_").replace(" ", "_")
+        table_name = self.uploader.table_name_for_file(filename)
 
         try:
             from modules.system_logger import SystemLogger
@@ -192,3 +240,11 @@ class FileRoutes:
         """
         tables = self.uploader.list_tables()
         return jsonify({"tables": tables, "count": len(tables)})
+
+    def uploads(self):
+        """
+        GET /file/uploads
+        Returns all raw files present in uploads/.
+        """
+        files = self.uploader.list_uploaded_files()
+        return jsonify({"files": files, "count": len(files)})

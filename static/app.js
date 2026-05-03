@@ -9,6 +9,7 @@ const APP = (() => {
   let conversations = [];     // [{id, name, messages:[]}]
   let activeChatId = null;
   let activeDbName = localStorage.getItem("qm_active_db") || "data.db"; // persisted DB name
+  let activeDbPath = localStorage.getItem("qm_active_db_path") || `database/${activeDbName}`;
 
   const pendingFiles  = [];   // files queued in upload modal
   let schemaSQL = null;       // last generated DDL preview
@@ -35,22 +36,41 @@ const APP = (() => {
     if (btn) { btn.disabled = busy; }
   }
 
-  function updateDbBadge(name, count) {
+  function updateDbBadge(name, count, path=null) {
     if (name) { activeDbName = name; localStorage.setItem("qm_active_db", name); }
+    if (path) { activeDbPath = path; localStorage.setItem("qm_active_db_path", path); }
     const displayName = name || activeDbName;
-    const n = document.getElementById("activeDbName");
-    const c = document.getElementById("activeDbTables");
-    const hn = document.getElementById("headerDbName");
+    const selector = document.getElementById("dbSelector");
     const hc = document.getElementById("headerTableCount");
-    if (n) n.textContent = displayName;
-    if (c) c.textContent = count != null ? `${count} tables` : "";
-    if (hn) hn.textContent = displayName;
+    if (selector) {
+      selector.dataset.activeName = displayName;
+      selector.value = activeDbPath;
+    }
     if (hc) hc.textContent = count != null ? `${count} tables` : "";
     
     // Auto refresh UI so the new active DB is highlighted in the sidebar
     if (name) {
       setTimeout(refreshKnowledgeBase, 100);
     }
+  }
+
+  function renderDbSelector(dbs, active) {
+    const selector = document.getElementById("dbSelector");
+    if (!selector) return;
+    const list = (dbs || []).map(db => typeof db === "string" ? { name: db, path: `database/${db}` } : db);
+    if (active?.path) {
+      activeDbPath = active.path;
+      activeDbName = active.name || active.path.split(/[\\/]/).pop();
+      localStorage.setItem("qm_active_db", activeDbName);
+      localStorage.setItem("qm_active_db_path", activeDbPath);
+    }
+    selector.innerHTML = list.map(db =>
+      `<option value="${db.path}">${db.name}</option>`
+    ).join("");
+    if (activeDbPath && !list.find(db => db.path === activeDbPath)) {
+      selector.insertAdjacentHTML("afterbegin", `<option value="${activeDbPath}">${activeDbName}</option>`);
+    }
+    selector.value = activeDbPath;
   }
 
   // ── Conversations ───────────────────────────────────────────────────────
@@ -288,7 +308,7 @@ const APP = (() => {
     closeModal("uploadModal");
 
     // Reconnect agent to current DB so newly uploaded tables are queryable
-    try { await API.loadDb(activeDbName.includes("/") ? activeDbName : `database/${activeDbName}`); } catch {}
+    try { await API.loadDb(activeDbPath); } catch {}
 
     await refreshKnowledgeBase();
     await loadSchemaPanel();
@@ -311,7 +331,7 @@ const APP = (() => {
       const res = await API.uploadDb(file);
       closeModal("loadDbModal");
       if (res.success) {
-        updateDbBadge(file.name, null);
+        updateDbBadge(file.name, null, res.db_path || `database/${file.name}`);
         toast(`Database "${file.name}" loaded!`, "success");
         UI.addAITextCard(`✅ Database **${file.name}** is now active. Start asking questions!`);
         await loadSchemaPanel();
@@ -336,7 +356,7 @@ const APP = (() => {
     const res = await API.loadDb(path);
     closeModal("loadDbModal");
     if (res.success) {
-      updateDbBadge(filename, null);
+      updateDbBadge(filename, null, res.db_path || path);
       toast(`Database loaded!`, "success");
       UI.addAITextCard(`✅ Active database switched to **${filename}**.`);
       await loadSchemaPanel();
@@ -344,6 +364,12 @@ const APP = (() => {
     } else {
       toast(`Failed to load: ${res.error}`, "error");
     }
+  }
+
+  async function switchDatabaseFromHeader(path) {
+    if (!path) return;
+    const filename = path.split(/[\\/]/).pop();
+    await switchDatabase(filename, path);
   }
 
   // ── Schema Modify ──────────────────────────────────────────────────────
@@ -390,9 +416,12 @@ const APP = (() => {
 
   async function refreshKnowledgeBase() {
     try {
-      const [tablesRes, docsRes, dbsRes] = await Promise.all([API.listTables(), API.ragDocuments(), API.listDatabases()]);
-      UI.renderKnowledgeBase(tablesRes.tables, docsRes.documents, dbsRes.databases);
-      UI.renderRagDocs(docsRes.documents);
+      const [tablesRes, docsRes, dbsRes, uploadsRes] = await Promise.all([
+        API.listTables(), API.ragDocuments(), API.listDatabases(), API.listUploads()
+      ]);
+      renderDbSelector(dbsRes.databases, dbsRes.active);
+      UI.renderKnowledgeBase(tablesRes.tables, docsRes.documents, dbsRes.databases, uploadsRes.files, activeDbPath);
+      UI.renderRagDocs(docsRes.documents, uploadsRes.files);
     } catch {}
   }
 
@@ -428,8 +457,9 @@ const APP = (() => {
     setupDropzone();
     setupUserProfile();
     updateDbBadge(activeDbName, null); // restore persisted DB badge
-    await loadSchemaPanel();
     await refreshKnowledgeBase();
+    try { await API.loadDb(activeDbPath); } catch {}
+    await loadSchemaPanel();
   }
 
   window.addEventListener("DOMContentLoaded", init);
@@ -438,7 +468,7 @@ const APP = (() => {
   return {
     newChat, sendQuery, handleKeyDown, autoResize, usePrompt,
     toggleSidebar, toggleRagMode, startRagQuery, exportChat,
-    openModal, closeModal, loadDatabase, switchDatabase, uploadDatabase, previewSchema, executeSchema,
+    openModal, closeModal, loadDatabase, switchDatabase, switchDatabaseFromHeader, uploadDatabase, previewSchema, executeSchema,
     uploadSelectedFiles, loadSchemaPanel, _removeFile, toast,
   };
 })();
@@ -455,6 +485,7 @@ function exportChat()           { APP.exportChat(); }
 function openModal(id)          { APP.openModal(id); }
 function closeModal(id)         { APP.closeModal(id); }
 function loadDatabase()         { APP.loadDatabase(); }
+function switchDatabaseFromHeader(path) { APP.switchDatabaseFromHeader(path); }
 function uploadDatabase()       { APP.uploadDatabase(); }
 function previewSchema()        { APP.previewSchema(); }
 function executeSchema()        { APP.executeSchema(); }

@@ -4,7 +4,7 @@ class APIKeyManager:
     """Manages API keys and provides rotation capabilities from api.txt."""
     def __init__(self, primary_key: str):
         self.keys = []
-        if primary_key:
+        if primary_key is not None:
             self.keys.append(primary_key)
             
         try:

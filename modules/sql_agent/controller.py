@@ -10,7 +10,6 @@ Allows loading external .db files at runtime.
 import os
 import sqlite3
 
-from dotenv import load_dotenv
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -18,8 +17,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import tool
 from langchain.agents import create_agent
 from modules.api_key_manager import APIKeyManager
-
-load_dotenv()
 
 PRIMARY_MODEL  = "gemini-3.1-flash-lite-preview"
 FALLBACK_MODEL = "gemini-2.5-flash"
@@ -158,8 +155,10 @@ class SQLAgentController:
 - After any modification: always say "✅ Done! I've made that change to your working copy. You can **download it** using the Download button."
 """
         try:
+            self.system_message = system_message
             self.agent = create_agent(model=self.llm, tools=self.tools, system_prompt=system_message)
         except Exception:
+            self.system_message = system_message
             self.agent = None
 
     def _init_llm(self, model: str) -> ChatGoogleGenerativeAI:
@@ -229,6 +228,26 @@ class SQLAgentController:
         except Exception:
             return ""
 
+    def execute_sql(self, sql: str) -> dict:
+        """
+        Executes a read-only SQL statement directly against the active database.
+        Used by /sql/execute after route-level validation.
+        """
+        if not self.db_path or not os.path.exists(self.db_path):
+            return {"success": False, "error": "No database connected.", "data": [], "columns": []}
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description] if cursor.description else []
+            data = [dict(row) for row in rows]
+            conn.close()
+            return {"success": True, "data": data, "columns": columns, "count": len(data)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "data": [], "columns": []}
+
     def run_agent(self, user_query: str) -> dict:
         """
         Runs the true Langchain Tool-Calling Agent to process the user's input.
@@ -261,6 +280,10 @@ class SQLAgentController:
                         self.api_key = self.key_manager.get_key()
                         self.llm = self._init_llm(PRIMARY_MODEL)
                         self._connect_db(self.db_path) # re-init toolkit
+                        try:
+                            self.agent = create_agent(model=self.llm, tools=self.tools, system_prompt=self.system_message)
+                        except Exception:
+                            self.agent = None
                         continue
                 SystemLogger.log("ERROR", "SQLAgentController", err_str)
                 return {"success": False, "error": err_str}

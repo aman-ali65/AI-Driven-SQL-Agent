@@ -30,7 +30,10 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--b
 .sidebar-top { padding: 16px; border-bottom: 1px solid var(--border); }
 .logo-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .logo-icon { width: 32px; height: 32px; background: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; }
-.logo-icon .material-icons-round { font-size: 18px; }
+.logo-icon .material-icons-round { 
+  font-size: 18px;
+  margin-left: 17px;
+ }
 .logo-name { font-weight: 700; font-size: 15px; }
 .logo-sub  { font-size: 11px; color: var(--muted); }
 .new-chat-btn { width: 100%; padding: 9px 14px; background: var(--primary); color: #fff; border: none; border-radius: var(--radius); font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: background .15s; }
@@ -81,6 +84,8 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--b
 .conv-title { font-size: 15px; font-weight: 600; outline: none; cursor: text; white-space: nowrap; overflow: hidden; max-width: 280px; }
 .conv-title:focus { border-bottom: 1px solid var(--primary); }
 .db-badge { display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
+.db-selector { max-width: 180px; background: transparent; border: 0; color: var(--muted); font: inherit; outline: none; cursor: pointer; }
+.db-selector option { background: var(--card); color: var(--text); }
 .badge-sep { color: var(--dim); }
 
 /* Chat messages */

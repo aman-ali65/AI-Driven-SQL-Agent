@@ -60,6 +60,10 @@ const API = (() => {
       return request("GET", "/file/tables");
     },
 
+    listUploads() {
+      return request("GET", "/file/uploads");
+    },
+
     /** GET /sql/databases — list all database files */
     listDatabases() {
       return request("GET", "/sql/databases");

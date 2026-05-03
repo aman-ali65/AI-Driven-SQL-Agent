@@ -192,12 +192,28 @@ class SQLRoutes:
     def list_databases(self):
         """
         GET /sql/databases
-        Returns a list of all .db and .sqlite files in the database/ folder.
+        Returns all .db and .sqlite files available to load.
         """
         import os
-        db_dir = "database"
-        if not os.path.exists(db_dir):
-            return jsonify({"databases": []})
-        
-        dbs = [f for f in os.listdir(db_dir) if f.endswith(".db") or f.endswith(".sqlite")]
-        return jsonify({"databases": dbs})
+        roots = ["database", "uploads"]
+        dbs = []
+        seen = set()
+        for db_dir in roots:
+            if not os.path.exists(db_dir):
+                continue
+            for filename in os.listdir(db_dir):
+                if not (filename.endswith(".db") or filename.endswith(".sqlite")):
+                    continue
+                path = os.path.join(db_dir, filename)
+                key = os.path.normpath(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dbs.append({"name": filename, "path": path.replace("\\", "/")})
+
+        active_path = os.path.normpath(self.controller.db_path)
+        active_name = os.path.basename(active_path)
+        return jsonify({
+            "databases": dbs,
+            "active": {"name": active_name, "path": self.controller.db_path.replace("\\", "/")}
+        })

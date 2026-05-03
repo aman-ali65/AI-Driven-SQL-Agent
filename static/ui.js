@@ -133,56 +133,95 @@ const UI = (() => {
     box.innerHTML = h;
   }
 
-  function renderKnowledgeBase(tables, docs, dbs) {
-    // --- Sidebar DB list (left panel) ---
+  function renderKnowledgeBase(tables, docs, dbs, uploads, activeDbPath) {
     const dbList = document.getElementById("sidebarDbList");
     if (dbList) {
-      const activeDb = document.getElementById("activeDbName")?.textContent || "";
-      dbList.innerHTML = (dbs||[]).map(db => {
-        const isActive = db === activeDb;
-        return `<div class="kb-item" style="border-left:2px solid ${isActive ? 'var(--success)' : 'var(--primary)'};padding-left:6px;">
-          <span class="material-icons-round" style="font-size:13px;color:${isActive ? 'var(--success)' : 'var(--primary)'}">dns</span>
-          <span class="kb-item-name" style="font-weight:${isActive?'700':'500'}">${esc(db)}</span>
-          ${isActive ? '<span class="badge-pill" style="background:rgba(5,150,105,0.15);color:var(--success);font-size:9px">ACTIVE</span>'
-                     : `<button class="rag-query-btn" onclick="APP.switchDatabase('${esc(db)}')" title="Switch">Switch →</button>`}
+      dbList.innerHTML = (dbs || []).map(db => {
+        const item = typeof db === "string" ? { name: db, path: `database/${db}` } : db;
+        const isActive = item.path === activeDbPath;
+        return `<div class="kb-item" style="border-left:2px solid ${isActive ? "var(--success)" : "var(--primary)"};padding-left:6px;">
+          <span class="material-icons-round" style="font-size:13px;color:${isActive ? "var(--success)" : "var(--primary)"}">dns</span>
+          <span class="kb-item-name" style="font-weight:${isActive ? "700" : "500"}">${esc(item.name)}</span>
+          ${isActive
+            ? '<span class="badge-pill" style="background:rgba(5,150,105,0.15);color:var(--success);font-size:9px">ACTIVE</span>'
+            : `<button class="rag-query-btn" onclick="APP.switchDatabase('${esc(item.name)}','${esc(item.path)}')" title="Switch">Switch</button>`}
         </div>`;
       }).join("") || `<p class="muted small" style="padding:4px 8px">No databases yet.</p>`;
     }
 
-    // --- Knowledge Base list (tables + docs) ---
     const list = document.getElementById("knowledgeBaseList");
     if (!list) return;
-    let h = "";
 
-    // Tables
-    h += (tables||[]).map(t => `<div class="kb-item">
+    let h = (tables || []).map(t => `<div class="kb-item">
       <span class="material-icons-round" style="font-size:13px;color:var(--success)">storage</span>
       <span class="kb-item-name">${esc(t)}</span>
       <span class="badge-pill badge-table">Table</span>
-      <button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(t)} table')" title="Query">Query →</button>
+      <button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(t)} table')" title="Query">Query</button>
     </div>`).join("");
 
-    // RAG Docs
-    h += (docs||[]).map(d => `<div class="kb-item">
+    const indexedDocs = new Set(docs || []);
+    h += (uploads || []).map(f => {
+      if (f.kind === "table_file") {
+        return `<div class="kb-item">
+          <span class="material-icons-round" style="font-size:13px;color:var(--success)">table_chart</span>
+          <span class="kb-item-name">${esc(f.filename)}</span>
+          <span class="badge-pill badge-table">${f.imported ? "Table" : "CSV/XLSX"}</span>
+          <button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(f.table_name)} table')" title="Query">Query</button>
+        </div>`;
+      }
+      if (f.kind === "rag_file") {
+        const docName = f.filename.replace(/\.[^.]+$/, "");
+        const indexed = indexedDocs.has(docName);
+        return `<div class="kb-item">
+          <span class="material-icons-round" style="font-size:13px;color:#a78bfa">description</span>
+          <span class="kb-item-name">${esc(f.filename)}</span>
+          <span class="badge-pill badge-rag">${indexed ? "RAG" : "File"}</span>
+          ${indexed
+            ? `<button class="rag-query-btn" onclick="APP.startRagQuery('${esc(docName)}')" title="Ask">Ask</button>`
+            : `<span class="muted small" style="margin-left:auto">Not indexed</span>`}
+        </div>`;
+      }
+      return "";
+    }).join("");
+
+    const uploadedDocNames = new Set((uploads || [])
+      .filter(f => f.kind === "rag_file")
+      .map(f => f.filename.replace(/\.[^.]+$/, "")));
+    h += (docs || []).filter(d => !uploadedDocNames.has(d)).map(d => `<div class="kb-item">
       <span class="material-icons-round" style="font-size:13px;color:#a78bfa">description</span>
       <span class="kb-item-name">${esc(d)}</span>
       <span class="badge-pill badge-rag">RAG</span>
-      <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')" title="Ask">Ask →</button>
+      <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')" title="Ask">Ask</button>
     </div>`).join("");
 
     list.innerHTML = h || `<p class="muted small" style="padding:4px 8px">No files yet.</p>`;
   }
 
-  function renderRagDocs(docs) {
+  function renderRagDocs(docs, uploads) {
     const box = document.getElementById("ragDocsList");
     if (!box) return;
-    box.innerHTML = (docs&&docs.length)
-      ? docs.map(d=>`<div class="rag-doc-row">
-          <span class="material-icons-round" style="font-size:13px">description</span>
-          <span>${esc(d)}</span>
-          <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')">Ask →</button>
-        </div>`).join("")
-      : `<p class="muted small">No documents yet.</p>`;
+    const indexedDocs = new Set(docs || []);
+    const ragUploads = (uploads || []).filter(f => f.kind === "rag_file");
+    let h = ragUploads.map(f => {
+      const docName = f.filename.replace(/\.[^.]+$/, "");
+      const indexed = indexedDocs.has(docName);
+      return `<div class="rag-doc-row">
+        <span class="material-icons-round" style="font-size:13px">description</span>
+        <span>${esc(f.filename)}</span>
+        ${indexed
+          ? `<button class="rag-query-btn" onclick="APP.startRagQuery('${esc(docName)}')">Ask</button>`
+          : `<span class="muted small" style="margin-left:auto">Not indexed</span>`}
+      </div>`;
+    }).join("");
+
+    const uploadedDocNames = new Set(ragUploads.map(f => f.filename.replace(/\.[^.]+$/, "")));
+    h += (docs || []).filter(d => !uploadedDocNames.has(d)).map(d => `<div class="rag-doc-row">
+      <span class="material-icons-round" style="font-size:13px">description</span>
+      <span>${esc(d)}</span>
+      <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')">Ask</button>
+    </div>`).join("");
+
+    box.innerHTML = h || `<p class="muted small">No documents yet.</p>`;
   }
 
   function renderConversations(convs, activeId, onClick) {

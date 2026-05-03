@@ -156,7 +156,9 @@
         <div class="chat-header-center">
           <div class="db-badge">
             <span class="green-dot"></span>
-            <span id="headerDbName">data.db</span>
+            <select id="dbSelector" class="db-selector" onchange="switchDatabaseFromHeader(this.value)">
+              <option value="database/data.db">data.db</option>
+            </select>
             <span class="badge-sep">·</span>
             <span id="headerTableCount">0 tables</span>
           </div>

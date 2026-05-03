@@ -11,12 +11,9 @@ import json
 import numpy as np
 from flask import request, jsonify
 from werkzeug.utils import secure_filename
-from dotenv import load_dotenv
 from sklearn.metrics.pairwise import cosine_similarity
 from google import genai
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-load_dotenv()
 
 ALLOWED_EXTENSIONS = {"pdf", "pptx", "ppt"}
 CHUNK_SIZE      = 800

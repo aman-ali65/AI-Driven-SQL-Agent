@@ -8,11 +8,8 @@ Also generates AI-powered data insights with Plotly charts.
 import os
 import sqlite3
 from flask import request, jsonify
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from modules.visualizer.chart_generator import ChartGenerator
-
-load_dotenv()
 
 PRIMARY_MODEL  = "gemini-2.5-flash-lite"
 FALLBACK_MODEL = "gemini-1.5-flash"
@@ -24,19 +21,24 @@ class SchemaAgent:
     Also generates natural language insights from SQL result data.
     """
 
-    def __init__(self, db_path: str, api_key: str):
+    def __init__(self, db_path: str, api_key: str, get_db_path=None):
         """
         Args:
             db_path:  Path to the SQLite database file.
             api_key:  Google Gemini API key.
         """
         self.db_path = db_path
+        self.get_db_path = get_db_path or (lambda: self.db_path)
         self.api_key = api_key
         self.llm     = ChatGoogleGenerativeAI(
             model=PRIMARY_MODEL, google_api_key=api_key, temperature=0)
         parent = os.path.dirname(db_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
+
+    def current_db_path(self) -> str:
+        self.db_path = self.get_db_path()
+        return self.db_path
 
     def generate_schema_sql(self, user_request: str) -> str:
         """
@@ -78,7 +80,7 @@ SQL:"""
         Returns:
             Dict: success (bool), message (str) or error (str)
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.current_db_path())
         try:
             conn.cursor().execute(sql)
             conn.commit()
@@ -95,9 +97,10 @@ SQL:"""
         Returns:
             { table_name: [{column, type, nullable}, ...] }
         """
-        if not os.path.exists(self.db_path):
+        db_path = self.current_db_path()
+        if not os.path.exists(db_path):
             return {}
-        conn   = sqlite3.connect(self.db_path)
+        conn   = sqlite3.connect(db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = cursor.fetchall()
