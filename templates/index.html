@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QueryMind — AI SQL Agent</title>
+  <meta name="description" content="Premium AI-powered SQL chatbot. Ask questions in plain English, get instant SQL results with interactive charts." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- Upload File Modal -->
+  <div class="modal-backdrop" id="uploadModal" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Upload to Knowledge Base</span>
+        <button class="icon-btn" onclick="closeModal('uploadModal')"><span class="material-icons-round">close</span></button>
+      </div>
+
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+        <span class="material-icons-round drop-icon">cloud_upload</span>
+        <p>Drag &amp; drop files here or <span class="link-text">click to browse</span></p>
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap">
+          <span style="font-size:11px;background:rgba(22,163,74,.15);color:#4ade80;padding:2px 8px;border-radius:12px">📊 CSV / Excel → SQL Table</span>
+          <span style="font-size:11px;background:rgba(124,58,237,.15);color:#a78bfa;padding:2px 8px;border-radius:12px">📄 PDF / PPTX → RAG Document</span>
+        </div>
+        <input type="file" id="fileInput" style="display:none" accept=".csv,.xlsx,.xls,.pdf,.pptx,.ppt" multiple />
+      </div>
+
+      <div id="uploadFileList" class="upload-file-list" style="display:none"></div>
+
+      <div class="modal-footer">
+        <button class="btn-outline" onclick="closeModal('uploadModal')">Cancel</button>
+        <button class="btn-primary" id="uploadConfirmBtn" onclick="uploadSelectedFiles()">
+          <span class="material-icons-round" style="font-size:16px">upload</span> Upload Files
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load Database Modal -->
+  <div class="modal-backdrop" id="loadDbModal" style="display:none">
+    <div class="modal" style="width:480px">
+      <div class="modal-header">
+        <span class="modal-title">Load Existing Database</span>
+        <button class="icon-btn" onclick="closeModal('loadDbModal')"><span class="material-icons-round">close</span></button>
+      </div>
+      <p class="muted" style="margin:0 0 16px">Upload a SQLite <strong>.db</strong> or <strong>.sqlite</strong> file — it will be saved and set as the active database.</p>
+      <label class="input-label">Database file</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="file" id="dbFileInput" class="text-input" accept=".db,.sqlite" style="flex:1;padding:8px" />
+      </div>
+      <div class="modal-footer" style="margin-top:16px">
+        <button class="btn-outline" onclick="closeModal('loadDbModal')">Cancel</button>
+        <button class="btn-primary" onclick="uploadDatabase()">Upload &amp; Load</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Schema Modify Modal -->
+  <div class="modal-backdrop" id="schemaModal" style="display:none">
+    <div class="modal" style="width:520px">
+      <div class="modal-header">
+        <span class="modal-title">Modify Schema</span>
+        <button class="icon-btn" onclick="closeModal('schemaModal')"><span class="material-icons-round">close</span></button>
+      </div>
+      <p class="muted" style="margin:0 0 16px">Describe the table change in plain English.</p>
+      <label class="input-label">Your request</label>
+      <textarea id="schemaRequestInput" class="text-input" rows="3" placeholder="e.g. Create a table employees with name, age, salary, department"></textarea>
+      <div id="schemaPreviewBox" style="display:none;margin-top:12px">
+        <label class="input-label">Generated SQL</label>
+        <pre class="sql-preview-block" id="schemaPreviewSQL"></pre>
+        <div id="schemaDangerWarn" style="display:none" class="danger-warn">
+          <span class="material-icons-round" style="font-size:16px">warning</span> Destructive operation!
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-outline" onclick="closeModal('schemaModal')">Cancel</button>
+        <button class="btn-outline" id="schemaPreviewBtn" onclick="previewSchema()">Preview SQL</button>
+        <button class="btn-primary" id="schemaExecuteBtn" style="display:none" onclick="executeSchema()">Execute</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Layout -->
+  <div class="app-layout">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="logo-row">
+          <div class="logo-icon"><span class="material-icons-round">database</span></div>
+          <div>
+            <div class="logo-name">QueryMind</div>
+            <div class="logo-sub">AI SQL Agent</div>
+          </div>
+        </div>
+        <button class="new-chat-btn" onclick="newChat()">
+          <span class="material-icons-round" style="font-size:16px">add</span> New Chat
+        </button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <!-- CONVERSATIONS -->
+        <div class="sidebar-section-label">Conversations</div>
+        <div id="conversationList" class="conversation-list"></div>
+
+        <!-- KNOWLEDGE BASE -->
+        <div class="sidebar-section-label" style="margin-top:16px">Knowledge Base</div>
+        <div id="knowledgeBaseList" class="kb-list"></div>
+        <button class="sidebar-link-btn" onclick="openModal('uploadModal')">
+          <span class="material-icons-round" style="font-size:14px">add</span> Upload File
+        </button>
+
+        <!-- DATABASE -->
+        <div class="sidebar-section-label" style="margin-top:16px">Databases</div>
+        <div id="sidebarDbList" class="kb-list"></div>
+        <button class="sidebar-link-btn" onclick="openModal('loadDbModal')">
+          <span class="material-icons-round" style="font-size:14px">upload_file</span> Upload Database
+        </button>
+
+        <!-- SYSTEM -->
+        <div class="sidebar-section-label" style="margin-top:16px">System</div>
+        <button class="sidebar-link-btn" onclick="window.location.href='/logs'">
+          <span class="material-icons-round" style="font-size:14px">terminal</span> View Logs
+        </button>
+      </div>
+
+      <!-- User Profile -->
+      <div class="sidebar-user">
+        <div class="user-avatar" id="userAvatarBtn" style="cursor:pointer" title="Click to change avatar text">HP</div>
+        <div class="user-info">
+          <div class="user-name" id="userNameEdit" contenteditable="true" spellcheck="false" title="Click to edit name">Hassan</div>
+          <div class="muted small" id="userRoleEdit" contenteditable="true" spellcheck="false" title="Click to edit role">Admin</div>
+        </div>
+        <span class="material-icons-round icon-muted" style="cursor:pointer" title="Settings">settings</span>
+      </div>
+    </aside>
+
+    <!-- MAIN CHAT -->
+    <main class="chat-main">
+      <!-- Radial glow decorations -->
+      <div class="glow-top-right"></div>
+
+      <!-- Header -->
+      <div class="chat-header">
+        <div class="chat-header-left">
+          <span class="material-icons-round icon-muted" onclick="toggleSidebar()" style="cursor:pointer">menu</span>
+          <span class="conv-title" id="chatTitle" contenteditable="true" spellcheck="false">Student Analysis</span>
+        </div>
+        <div class="chat-header-center">
+          <div class="db-badge">
+            <span class="green-dot"></span>
+            <span id="headerDbName">data.db</span>
+            <span class="badge-sep">·</span>
+            <span id="headerTableCount">0 tables</span>
+          </div>
+        </div>
+        <div class="chat-header-right">
+          <button class="btn-outline small" onclick="exportChat()">
+            <span class="material-icons-round" style="font-size:14px">download</span> Export
+          </button>
+          <button class="icon-btn" title="More options"><span class="material-icons-round">more_vert</span></button>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div class="chat-messages" id="chatMessages">
+        <!-- Welcome state -->
+        <div class="welcome-state" id="welcomeState">
+          <div class="welcome-icon"><span class="material-icons-round">auto_awesome</span></div>
+          <h2 class="welcome-title">Ask anything about your data</h2>
+          <p class="welcome-sub">Upload a CSV file or load a database, then ask questions in plain English.</p>
+          <div class="quick-prompts">
+            <button class="quick-prompt-btn" onclick="usePrompt('Show me all records')">Show me all records</button>
+            <button class="quick-prompt-btn" onclick="usePrompt('What is the average score?')">What is the average?</button>
+            <button class="quick-prompt-btn" onclick="usePrompt('Show top 5 results')">Show top 5 results</button>
+            <button class="quick-prompt-btn" onclick="usePrompt('Count rows by category')">Count by category</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Area -->
+      <div class="chat-input-area">
+        <div class="chat-input-inner">
+          <button class="icon-btn" onclick="openModal('uploadModal')" title="Attach file">
+            <span class="material-icons-round">attach_file</span>
+          </button>
+          <textarea id="queryInput" class="chat-textarea" rows="1"
+            placeholder="Ask anything about your data..."
+            onkeydown="handleKeyDown(event)"
+            oninput="autoResize(this)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendQuery()">
+            <span class="material-icons-round">arrow_upward</span>
+          </button>
+        </div>
+        <div class="input-toggles">
+          <label class="toggle-label">
+            <input type="checkbox" id="autoExecToggle" checked />
+            <span class="toggle-text">Auto Execute</span>
+          </label>
+          <div class="badge-pill">Chart: Auto</div>
+          <div class="badge-pill" id="ragTogglePill" onclick="toggleRagMode()" style="cursor:pointer">Mode: SQL</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- RIGHT SCHEMA PANEL -->
+    <aside class="schema-panel" id="schemaPanel">
+      <div class="schema-header">
+        <span class="schema-title">Schema Explorer</span>
+        <button class="icon-btn" onclick="loadSchemaPanel()" title="Refresh"><span class="material-icons-round">refresh</span></button>
+      </div>
+
+      <div class="schema-scroll">
+        <div id="schemaContent">
+          <p class="muted small" style="padding:8px 0">Loading schema...</p>
+        </div>
+
+        <div class="schema-section-label">Quick Queries</div>
+        <div class="quick-query-chips" id="quickChips">
+          <button class="chip-btn" onclick="usePrompt('Show all records')">Show All</button>
+          <button class="chip-btn" onclick="usePrompt('Show top 5 records by first numeric column')">Top 5</button>
+          <button class="chip-btn" onclick="usePrompt('Count total rows in all tables')">Row Count</button>
+          <button class="chip-btn" onclick="usePrompt('Show average of all numeric columns')">Average</button>
+        </div>
+
+        <div class="schema-section-label" style="margin-top:16px">RAG Documents</div>
+        <div id="ragDocsList" class="rag-docs-list">
+          <p class="muted small">No documents indexed yet.</p>
+        </div>
+      </div>
+    </aside>
+
+  </div><!-- end app-layout -->
+
+  <!-- Toaster Notifications -->
+  <div id="toasterContainer" style="
+    position:fixed;bottom:24px;right:24px;
+    display:flex;flex-direction:column;gap:10px;
+    z-index:9999;pointer-events:none;
+  "></div>
+
+  <!-- Load order matters: API layer first, then UI renderers, then app logic -->
+  <script src="/static/api.js"></script>
+  <script src="/static/ui.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

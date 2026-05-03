@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QueryMind - System Logs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .logs-container {
+      padding: 24px;
+      height: 100%;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .logs-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logs-content {
+      flex: 1;
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      font-family: monospace;
+      font-size: 13px;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      overflow-y: auto;
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="logo-row">
+          <div class="logo-icon"><span class="material-icons-round">database</span></div>
+          <div>
+            <div class="logo-name">QueryMind</div>
+            <div class="logo-sub">System Logs</div>
+          </div>
+        </div>
+        <button class="new-chat-btn" onclick="window.location.href='/'">
+          <span class="material-icons-round" style="font-size:16px">chat</span> Back to Chat
+        </button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <!-- Navigation -->
+        <!-- Navigation -->
+        <div class="sidebar-section-label" style="margin-top:16px">System</div>
+        <button class="sidebar-link-btn active">
+          <span class="material-icons-round" style="font-size:14px">terminal</span> View Logs
+        </button>
+      </div>
+
+      <!-- User Profile -->
+      <div class="sidebar-user">
+        <div class="user-avatar" id="userAvatarBtn" style="cursor:pointer" title="Click to change avatar text">HP</div>
+        <div class="user-info">
+          <div class="user-name" id="userNameEdit" contenteditable="true" spellcheck="false" title="Click to edit name">Hassan</div>
+          <div class="muted small" id="userRoleEdit" contenteditable="true" spellcheck="false" title="Click to edit role">Admin</div>
+        </div>
+        <span class="material-icons-round icon-muted" style="cursor:pointer" title="Settings">settings</span>
+      </div>
+    </aside>
+
+    <!-- MAIN CHAT AREA (Reused for logs) -->
+    <main class="chat-main">
+      <div class="glow-top-right"></div>
+
+      <!-- Header -->
+      <div class="chat-header">
+        <div class="chat-header-left">
+          <span class="conv-title">System Logs Dashboard</span>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div class="logs-container">
+        <div class="logs-header">
+          <h3>Application Debug Logs</h3>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-outline" onclick="fetchLogs()">
+              <span class="material-icons-round" style="font-size: 16px;">refresh</span> Refresh
+            </button>
+            <button class="btn-outline" onclick="clearLogs()" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3);">
+              <span class="material-icons-round" style="font-size: 16px;">delete_sweep</span> Clear Logs
+            </button>
+          </div>
+        </div>
+        <div class="logs-content" id="logsContent">Loading logs...</div>
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    // Profile sync
+    const nameEl = document.getElementById("userNameEdit");
+    const roleEl = document.getElementById("userRoleEdit");
+    const avatarEl = document.getElementById("userAvatarBtn");
+
+    if (nameEl) {
+      nameEl.textContent = localStorage.getItem("qm_user_name") || "Hassan";
+      nameEl.addEventListener("blur", () => {
+        localStorage.setItem("qm_user_name", nameEl.textContent.trim());
+        if (avatarEl) avatarEl.textContent = nameEl.textContent.trim().substring(0, 2).toUpperCase();
+      });
+    }
+    if (roleEl) {
+      roleEl.textContent = localStorage.getItem("qm_user_role") || "Admin";
+      roleEl.addEventListener("blur", () => localStorage.setItem("qm_user_role", roleEl.textContent.trim()));
+    }
+    if (avatarEl) {
+      avatarEl.textContent = (localStorage.getItem("qm_user_name") || "Hassan").substring(0, 2).toUpperCase();
+      avatarEl.addEventListener("click", () => {
+        const newInitials = prompt("Enter initials (e.g. HP):", avatarEl.textContent);
+        if (newInitials) avatarEl.textContent = newInitials.substring(0, 2).toUpperCase();
+      });
+    }
+
+    // Fetch Logs
+    async function fetchLogs() {
+      const logsContent = document.getElementById("logsContent");
+      try {
+        const res = await fetch("/logs/api");
+        const data = await res.json();
+        logsContent.textContent = data.logs;
+        logsContent.scrollTop = logsContent.scrollHeight;
+      } catch (err) {
+        logsContent.textContent = "Error loading logs: " + err;
+      }
+    }
+
+    async function clearLogs() {
+      if (!confirm("Are you sure you want to clear all logs?")) return;
+      try {
+        await fetch("/logs/clear", { method: "POST" });
+        fetchLogs();
+      } catch (err) {
+        alert("Failed to clear logs.");
+      }
+    }
+
+    // Init
+    fetchLogs();
+  </script>
+</body>
+</html>
