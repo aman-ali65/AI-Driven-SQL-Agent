@@ -13,4 +13,4 @@ app.register_blueprint(file_bp, url_prefix='/file')
 app.register_blueprint(rag_bp, url_prefix='/rag')
 app.register_blueprint(schema_bp, url_prefix='/schema')
 if __name__ == '__main__':
-app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000)
