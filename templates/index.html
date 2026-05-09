@@ -8,7 +8,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
@@ -163,11 +162,24 @@
             <span id="headerTableCount">0 tables</span>
           </div>
         </div>
-        <div class="chat-header-right">
-          <button class="btn-outline small" onclick="exportChat()">
-            <span class="material-icons-round" style="font-size:14px">download</span> Export
+        <div class="chat-header-right" style="position:relative;">
+          <button class="icon-btn" title="More options" onclick="toggleHeaderMenu(event)">
+            <span class="material-icons-round">more_vert</span>
           </button>
-          <button class="icon-btn" title="More options"><span class="material-icons-round">more_vert</span></button>
+          <div id="headerDropdown" class="dropdown-menu" style="display:none;position:absolute;top:48px;right:0;background:#161925;border:1px solid #2d3142;border-radius:12px;padding:12px;width:220px;box-shadow:0 20px 50px rgba(0,0,0,0.6);z-index:1000;animation:fadeIn 0.2s ease;">
+            <div class="sidebar-section-label" style="margin:0 0 8px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8">Current Database</div>
+            <button class="sidebar-link-btn" onclick="downloadActiveDatabase()" style="margin-bottom:4px;background:rgba(255,255,255,0.03)">
+              <span class="material-icons-round" style="font-size:16px;color:#4ade80">download</span> Download DB
+            </button>
+            <div style="height:1px;background:#2d3142;margin:12px 0;"></div>
+            <div class="sidebar-section-label" style="margin:0 0 8px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8">Export Conversation</div>
+            <button class="sidebar-link-btn" onclick="exportChat('txt')" style="margin-bottom:4px;background:rgba(255,255,255,0.03)">
+              <span class="material-icons-round" style="font-size:16px;color:#60a5fa">description</span> Export as TXT
+            </button>
+            <button class="sidebar-link-btn" onclick="exportChat('json')" style="background:rgba(255,255,255,0.03)">
+              <span class="material-icons-round" style="font-size:16px;color:#a78bfa">data_object</span> Export as JSON
+            </button>
+          </div>
         </div>
       </div>
 

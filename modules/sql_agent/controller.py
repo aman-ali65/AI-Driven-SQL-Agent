@@ -100,43 +100,157 @@ class SQLAgentController:
                 return "Error: No database connected."
             try:
                 import shutil
-                # Work on the copy (create it if it doesn't exist)
-                copy_path = self.db_path.replace(".db", "_modified.db").replace(".sqlite", "_modified.sqlite")
-                if not os.path.exists(copy_path):
-                    shutil.copy2(self.db_path, copy_path)
+                # Work on the copy (create it if it doesn't exist), unless it's a freshly created DB
+                if "_modified" in self.db_path or getattr(self, "is_new_db", False):
+                    copy_path = self.db_path
+                else:
+                    copy_path = self.db_path.replace(".db", "_modified.db").replace(".sqlite", "_modified.sqlite")
+                    if not os.path.exists(copy_path):
+                        shutil.copy2(self.db_path, copy_path)
+                
                 self.modified_db_path = copy_path
+                self.db_path = copy_path # update active db path so further queries use the modified DB
+                
                 conn = sqlite3.connect(copy_path)
                 cursor = conn.cursor()
                 cursor.execute(sql)
                 conn.commit()
                 affected = cursor.rowcount
                 conn.close()
-                return f"Success! Statement executed on the working copy. Rows affected: {affected}. The modified database can be downloaded via the Download button."
+                return f"Success! Statement executed on the working copy. Rows affected: {affected}. The active database has been switched to this modified copy."
             except Exception as e:
                 return f"Error modifying database: {str(e)}"
 
-        self.tools = [query_database, get_schema, modify_database]
-        system_message = """You are **QueryMind** — an elite AI SQL Data Engineer. You work like a senior data engineer who talks naturally while doing the work for the user. The user should feel like they're having a conversation with a brilliant colleague who understands data deeply.
+        @tool
+        def generate_python_chart(python_code: str) -> str:
+            """Execute Python code to generate a custom Seaborn/Matplotlib chart.
+            The results of your last query are available as a pandas DataFrame named 'df'.
+            You MUST plot the chart using matplotlib.pyplot as plt or seaborn as sns.
+            Do NOT call plt.show(). The system will automatically capture the current plt figure.
+            Returns a success message if the chart was successfully created and captured.
+            """
+            from modules.system_logger import SystemLogger
+            import pandas as pd
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            import io, base64
 
-## 🔧 Tools Available
+            SystemLogger.log("CHART", "Tool:generate_python_chart", "Executing custom chart code.")
+            
+            if self.last_data is None or self.last_columns is None:
+                return "Error: No data available. You must run query_database first."
+            
+            try:
+                # Prepare execution environment
+                df = pd.DataFrame(self.last_data, columns=self.last_columns)
+                local_vars = {"df": df, "plt": plt, "sns": sns, "pd": pd}
+                
+                # Clear previous plots
+                plt.clf()
+                
+                # Set default style for dark theme
+                plt.style.use("dark_background")
+                
+                # Execute user code
+                exec(python_code, globals(), local_vars)
+                
+                # Capture plot
+                fig = plt.gcf()
+                if not fig.axes:
+                    return "Error: Python code executed successfully but no plot was drawn."
+                    
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", bbox_inches="tight", facecolor="#1F2937", dpi=120)
+                plt.close(fig)
+                buf.seek(0)
+                b64_str = base64.b64encode(buf.read()).decode("utf-8")
+                
+                # Store the custom chart to be served by the agent
+                self.custom_chart_b64 = b64_str
+                
+                return "Success! Chart generated successfully. It will be displayed to the user automatically."
+            except Exception as e:
+                return f"Error executing python code: {str(e)}"
 
-1. **`get_schema`** — Get ALL tables, columns, and data types. Call this FIRST before any query or modification. Required to know what exists.
+        @tool
+        def create_new_database(db_name: str) -> str:
+            """Creates a brand new, empty SQLite database with the specified name and switches to it.
+            db_name: The name of the new database (e.g. 'sales_data.db'). If it doesn't end in .db, it will be added.
+            Use this when the user asks to start fresh, create a new database, or build a new schema from scratch.
+            """
+            from modules.system_logger import SystemLogger
+            import os
+            import sqlite3
+            
+            if not db_name.endswith(('.db', '.sqlite')):
+                db_name += ".db"
+                
+            db_dir = os.path.dirname(self.db_path)
+            new_path = os.path.join(db_dir, db_name)
+            
+            try:
+                # Create empty db
+                conn = sqlite3.connect(new_path)
+                conn.close()
+                
+                # Switch to new db
+                self._connect_db(new_path)
+                self.modified_db_path = new_path
+                self.db_path = new_path
+                self.is_new_db = True
+                
+                SystemLogger.log("INFO", "Tool:create_new_database", f"Created and switched to {db_name}")
+                return f"Success! Created a new empty database named {db_name} and switched to it. You can now use modify_database to create tables in it."
+            except Exception as e:
+                return f"Error creating new database: {str(e)}"
 
-2. **`query_database`** — Execute a SELECT query to read and analyze data. Use for questions, stats, filtering, aggregations, top-N, averages, counts, joins.
+        self.tools = [query_database, get_schema, modify_database, generate_python_chart, create_new_database]
+        system_message = """You are **QueryMind** — an elite AI SQL Data Engineer. You work like a senior data engineer who talks naturally while doing the work for the user. 
+You are equipped with 5 specific tools. ALWAYS use these tools directly to answer the user's data requests without asking for permission or explaining that you will use them first.
 
-3. **`modify_database`** — Execute DDL or DML (ALTER TABLE, CREATE TABLE, ADD COLUMN, INSERT, UPDATE, DELETE) on a **COPY** of the database. The original is NEVER touched. After modifying, always confirm what was done.
+## 🔧 Tools Available (Full Context)
+
+1. **`get_schema`**:
+   - **Purpose**: Retrieves the full database schema, including all tables, columns, and data types.
+   - **When to use**: ALWAYS call this FIRST before writing ANY query or modification, unless you already know the exact schema for the current request.
+   - **Arguments**: None.
+
+2. **`query_database`**:
+   - **Purpose**: Executes a standard SELECT SQL query to read data from the database.
+   - **When to use**: Use this to answer questions about the data, fetch statistics, filter rows, or perform aggregations.
+   - **Arguments**: Takes a single string `sql` containing the SQLite SELECT query.
+   - **Output**: Returns the raw data rows.
+
+3. **`modify_database`**:
+   - **Purpose**: Executes DDL or DML statements (CREATE TABLE, ALTER TABLE, INSERT, UPDATE, DELETE, DROP) to restructure or modify the data.
+   - **When to use**: When the user explicitly asks to add a column, insert a record, drop a table, or update data.
+   - **Arguments**: Takes a single string `sql` containing the SQLite DDL/DML statement.
+   - **Output**: Executes on a safe working copy and switches the active database to the copy.
+
+4. **`generate_python_chart`**:
+   - **Purpose**: Writes and executes Python code to generate a highly customized Seaborn or Matplotlib chart.
+   - **When to use**: When the user specifically requests a chart or visualization, or if you feel a complex custom chart would be insightful.
+   - **Arguments**: Takes a single string `python_code`. The variable `df` is already available containing your LAST query result. 
+   - **Output**: Automatically captures the chart and sends it to the UI. Never apologize for not being able to show a chart; use this tool instead!
+
+5. **`create_new_database`**:
+   - **Purpose**: Creates an entirely new, empty SQLite database file and makes it the active database.
+   - **When to use**: When the user explicitly asks to start a new database or create a new schema from scratch (e.g. "Create a new database called employee_db").
+   - **Arguments**: `db_name` containing the new database filename.
+   - **Output**: Switches the active database. You should follow up by using `modify_database` to create the requested tables inside it.
 
 ## 🧠 Reasoning Flow
 
-**For data questions:**
-1. Call `get_schema` → understand the structure
-2. Write precise SQLite SQL → execute with `query_database`
-3. Give a clear, insightful, conversational answer
+**For data questions & charts:**
+1. Call `get_schema` to understand the structure.
+2. Write precise SQLite SQL and execute it with `query_database`.
+3. If a chart is requested, use `generate_python_chart` and write seaborn code using the `df` variable.
+4. Give a clear, insightful answer based on the returned data.
 
 **For schema/modification requests** ("add a column", "create a table", "update rows"):
-1. Call `get_schema` first to confirm current structure
-2. Use `modify_database` with the appropriate DDL/DML
-3. Confirm what was done and tell the user they can download the modified DB
+1. Call `get_schema` first to confirm current structure.
+2. Use `modify_database` with the appropriate DDL/DML.
+3. Confirm what was done.
 
 **For general conversation:** Reply naturally without using any tools.
 
@@ -148,10 +262,9 @@ class SQLAgentController:
 - Use proper SQLite syntax — no MySQL/PostgreSQL specific functions.
 
 ## 💬 Communication Style
-- Talk like a colleague: "Sure, let me check the schema first..." → then do it
-- Lead with the **answer**, then explain the data
-- Use **markdown**: bold numbers, bullet lists, tables for comparisons
-- Never dump raw SQL unless user asks
+- Lead with the **answer**, then explain the data.
+- Use **markdown**: bold numbers, bullet lists, tables for comparisons.
+- Do NOT output raw SQL queries in your text. The UI handles showing the SQL block separately automatically!
 - After any modification: always say "✅ Done! I've made that change to your working copy. You can **download it** using the Download button."
 """
         try:
@@ -259,6 +372,7 @@ class SQLAgentController:
         self.last_sql = None
         self.last_data = None
         self.last_columns = None
+        self.custom_chart_b64 = None
         
         if not self.agent:
             return {"success": False, "error": "Agent is not configured properly."}
@@ -268,7 +382,7 @@ class SQLAgentController:
             try:
                 result = self.agent.invoke(
                     {"messages": [HumanMessage(content=user_query)]},
-                    config={"recursion_limit": 10}
+                    config={"recursion_limit": 30}
                 )
                 raw_answer = result["messages"][-1].content
                 break

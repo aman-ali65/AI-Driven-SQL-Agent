@@ -137,6 +137,34 @@ ANSWER:"""
         return [f.replace(".npy", "")
                 for f in os.listdir(self.embeddings_folder) if f.endswith(".npy")]
 
+    def delete_document(self, doc_name: str) -> dict:
+        """
+        Removes RAG embedding files (.npy and .json) for a given document name.
+        Also removes the raw source file from upload_folder if it exists.
+        Returns a dict summarising what was deleted.
+        """
+        removed = {"embeddings": [], "raw_file": None}
+        for ext in [".npy", ".json"]:
+            p = os.path.join(self.embeddings_folder, doc_name + ext)
+            if os.path.isfile(p):
+                try:
+                    os.remove(p)
+                    removed["embeddings"].append(doc_name + ext)
+                except Exception:
+                    pass
+        # Try to remove the original raw file (any extension)
+        for candidate in os.listdir(self.upload_folder):
+            base = candidate.rsplit(".", 1)[0] if "." in candidate else candidate
+            if base == doc_name:
+                raw_path = os.path.join(self.upload_folder, candidate)
+                try:
+                    os.remove(raw_path)
+                    removed["raw_file"] = candidate
+                except Exception:
+                    pass
+                break
+        return removed
+
     def process_upload(self, filepath: str, filename: str) -> dict:
         """Full upload pipeline: extract -> chunk -> embed -> save."""
         ext      = filename.rsplit(".", 1)[1].lower()
@@ -163,9 +191,10 @@ class RAGRoutes:
         self.rag = rag
 
     def register(self):
-        self.app.add_url_rule("/rag/upload",    "rag_upload",    self.upload,    methods=["POST"])
-        self.app.add_url_rule("/rag/query",     "rag_query",     self.query,     methods=["POST"])
-        self.app.add_url_rule("/rag/documents", "rag_documents", self.documents, methods=["GET"])
+        self.app.add_url_rule("/rag/upload",             "rag_upload",    self.upload,    methods=["POST"])
+        self.app.add_url_rule("/rag/query",              "rag_query",     self.query,     methods=["POST"])
+        self.app.add_url_rule("/rag/documents",          "rag_documents", self.documents, methods=["GET"])
+        self.app.add_url_rule("/rag/delete/<doc_name>",  "rag_delete",    self.delete,    methods=["DELETE"])
 
     def upload(self):
         """POST /rag/upload — Accepts PDF/PPTX, builds embedding index."""
@@ -209,3 +238,8 @@ class RAGRoutes:
         """GET /rag/documents — list all indexed document names."""
         docs = self.rag.list_documents()
         return jsonify({"documents": docs, "count": len(docs)})
+
+    def delete(self, doc_name):
+        """DELETE /rag/delete/<doc_name> — remove embeddings and raw file."""
+        removed = self.rag.delete_document(doc_name)
+        return jsonify({"success": True, "doc_name": doc_name, "removed": removed})

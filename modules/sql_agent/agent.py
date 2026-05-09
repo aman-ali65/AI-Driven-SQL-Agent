@@ -43,8 +43,10 @@ class SQLRoutes:
         self.app.add_url_rule("/sql/execute",       "sql_execute",    self.execute,     methods=["POST"])
         self.app.add_url_rule("/sql/load-db",       "sql_load_db",    self.load_db,     methods=["POST"])
         self.app.add_url_rule("/sql/upload-db",     "sql_upload_db",  self.upload_db,   methods=["POST"])
-        self.app.add_url_rule("/sql/download-copy", "sql_dl_copy",    self.download_copy, methods=["GET"])
         self.app.add_url_rule("/sql/databases",     "sql_databases",  self.list_databases, methods=["GET"])
+        self.app.add_url_rule("/sql/delete-db/<filename>", "sql_delete_db", self.delete_db, methods=["DELETE"])
+        self.app.add_url_rule("/sql/download/<path:filename>", "sql_download_any", self.download_any_db, methods=["GET"])
+        self.app.add_url_rule("/sql/download-copy", "sql_download_copy", self.download_copy, methods=["GET"])
 
     def query(self):
         """
@@ -84,7 +86,10 @@ class SQLRoutes:
                 "message":       "Dangerous SQL blocked (DROP/DELETE/TRUNCATE)."
             })
 
-        chart = self.chart_gen.generate(db_data, sql) if db_data and sql else None
+        if getattr(self.controller, "custom_chart_b64", None):
+            chart = {"type": "image", "src": f"data:image/png;base64,{self.controller.custom_chart_b64}"}
+        else:
+            chart = self.chart_gen.generate(db_data, sql) if db_data and sql else None
 
         result_dict = {
             "success": True,
@@ -99,7 +104,8 @@ class SQLRoutes:
             "generated_sql": sql or "", 
             "answer": answer,
             "result": result_dict, 
-            "chart": chart
+            "chart": chart,
+            "active_db_path": getattr(self.controller, 'db_path', None)
         })
 
     def schema(self):
@@ -189,6 +195,23 @@ class SQLRoutes:
             mimetype="application/octet-stream"
         )
 
+    def download_any_db(self, filename):
+        """
+        GET /sql/download/<filename>
+        Downloads any database file from the database/ directory.
+        """
+        import os
+        from flask import send_file
+        path = os.path.join("database", filename)
+        if not os.path.exists(path):
+            return jsonify({"error": "File not found"}), 404
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/octet-stream"
+        )
+
     def list_databases(self):
         """
         GET /sql/databases
@@ -217,3 +240,28 @@ class SQLRoutes:
             "databases": dbs,
             "active": {"name": active_name, "path": self.controller.db_path.replace("\\", "/")}
         })
+
+    def delete_db(self, filename):
+        """
+        DELETE /sql/delete-db/<filename>
+        Deletes a specific database file from uploads or database directories.
+        """
+        import os
+        removed = False
+        roots = ["database", "uploads"]
+        for db_dir in roots:
+            p = os.path.join(db_dir, filename)
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    removed = True
+                except Exception as e:
+                    return jsonify({"success": False, "error": str(e)}), 500
+        
+        if removed:
+            # If we deleted the active DB, we should reset it or handle gracefully
+            if os.path.basename(self.controller.db_path) == filename:
+                self.controller.db_path = "database/data.db"
+            return jsonify({"success": True, "removed": True, "filename": filename})
+        else:
+            return jsonify({"success": False, "error": "Database not found"}), 404

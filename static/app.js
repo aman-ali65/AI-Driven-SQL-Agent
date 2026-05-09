@@ -102,16 +102,24 @@ const APP = (() => {
     document.getElementById("chatTitle").textContent = conv.name;
     document.getElementById("chatMessages").innerHTML = "";
     conv.messages.forEach(m => {
-      if (m.role === "user") UI.addUserBubble(m.text);
-      else UI.addAITextCard(m.text);
+      if (m.role === "user") {
+        UI.addUserBubble(m.text);
+      } else {
+        if (m.data) {
+          UI.addTypingCard();
+          UI.replaceTypingCard(m.data);
+        } else {
+          UI.addAITextCard(m.text);
+        }
+      }
     });
     UI.renderConversations(conversations, activeChatId, switchChat);
   }
 
-  function saveConversationMsg(role, text) {
+  function saveConversationMsg(role, text, data = null) {
     const conv = conversations.find(c => c.id === activeChatId);
     if (conv) {
-      conv.messages.push({ role, text });
+      conv.messages.push({ role, text, data });
       if (role === "user" && conv.name === "New Chat") {
         conv.name = text.slice(0, 32) + (text.length > 32 ? "…" : "");
         document.getElementById("chatTitle").textContent = conv.name;
@@ -160,7 +168,15 @@ const APP = (() => {
         data = await API.sqlQuery(question, autoEx);
       }
       UI.replaceTypingCard(data);
-      saveConversationMsg("ai", data.answer || data.message || "");
+      saveConversationMsg("ai", data.answer || data.message || "", data);
+      
+      // Auto-refresh schema if the AI modified the DB and switched to a copy
+      if (data.active_db_path && data.active_db_path !== activeDbPath) {
+        const name = data.active_db_path.split(/[\\/]/).pop();
+        updateDbBadge(name, null, data.active_db_path);
+        await loadSchemaPanel();
+        await refreshKnowledgeBase();
+      }
     } catch (e) {
       UI.replaceTypingCard({ error: "Network error: " + e.message });
     } finally {
@@ -191,11 +207,28 @@ const APP = (() => {
   function toggleRagMode() {
     ragMode = !ragMode;
     const pill = document.getElementById("ragTogglePill");
-    if (pill) pill.textContent = ragMode ? "Mode: RAG" : "Mode: SQL";
+    if (pill) {
+      pill.textContent = ragMode ? "Mode: RAG" : "Mode: SQL";
+      pill.style.background = ragMode ? "rgba(124,58,237,.2)" : "rgba(255,255,255,.05)";
+      pill.style.color = ragMode ? "#a78bfa" : "var(--muted)";
+    }
     const inp = document.getElementById("queryInput");
-    if (inp) inp.placeholder = ragMode
-      ? `Ask a question from "${activeRagDoc || "a document"}"...`
-      : "Ask anything about your data...";
+    if (inp) {
+      inp.placeholder = ragMode 
+        ? `Ask a question from "${activeRagDoc || "a document"}"...` 
+        : "Ask anything about your data...";
+    }
+    toast(`RAG Mode ${ragMode ? "Enabled" : "Disabled"}`, ragMode ? "success" : "info");
+  }
+
+  function openModal(id) {
+    const m = document.getElementById(id);
+    if (m) m.style.display = "flex";
+  }
+
+  function closeModal(id) {
+    const m = document.getElementById(id);
+    if (m) m.style.display = "none";
   }
 
   function startRagQuery(docName) {
@@ -207,25 +240,62 @@ const APP = (() => {
     if (inp) { inp.placeholder = `Ask from "${docName}"...`; inp.focus(); }
   }
 
-  function exportChat() {
+  function exportChat(format = 'txt') {
+    closeHeaderMenu();
     const msgs = document.getElementById("chatMessages");
     if (!msgs) return;
-    const text = Array.from(msgs.querySelectorAll(".user-bubble,.ai-text,.sql-code"))
-      .map(el => el.className.includes("user-bubble") ? "YOU: "+el.textContent : el.textContent)
-      .join("\n\n---\n\n");
+    
+    let out = "";
+    let mime = "";
+    let filename = "";
+    
+    if (format === 'json') {
+      const chatData = [];
+      Array.from(msgs.querySelectorAll(".user-bubble, .ai-text, .sql-code")).forEach(el => {
+        if (el.className.includes("user-bubble")) chatData.push({ role: "user", content: el.textContent });
+        else if (el.className.includes("sql-code")) chatData.push({ role: "ai_sql", content: el.textContent });
+        else chatData.push({ role: "ai", content: el.textContent });
+      });
+      out = JSON.stringify(chatData, null, 2);
+      mime = "application/json";
+      filename = "chat-export.json";
+    } else {
+      out = Array.from(msgs.querySelectorAll(".user-bubble,.ai-text,.sql-code"))
+        .map(el => el.className.includes("user-bubble") ? "YOU: "+el.textContent : el.textContent)
+        .join("\n\n---\n\n");
+      mime = "text/plain";
+      filename = "chat-export.txt";
+    }
+    
     const a = document.createElement("a");
-    a.href = "data:text/plain;charset=utf-8," + encodeURIComponent(text);
-    a.download = "chat-export.txt";
+    a.href = `data:${mime};charset=utf-8,` + encodeURIComponent(out);
+    a.download = filename;
     a.click();
   }
 
-  // ── Modals ─────────────────────────────────────────────────────────────
-  function openModal(id) { document.getElementById(id).style.display = "flex"; }
-  function closeModal(id) { document.getElementById(id).style.display = "none"; }
+  function toggleHeaderMenu(e) {
+    if(e) e.stopPropagation();
+    const menu = document.getElementById("headerDropdown");
+    if(menu) menu.style.display = menu.style.display === "none" ? "block" : "none";
+  }
 
-  // Click backdrop to close
+  function closeHeaderMenu() {
+    const menu = document.getElementById("headerDropdown");
+    if(menu) menu.style.display = "none";
+  }
+
+  function downloadActiveDatabase() {
+    closeHeaderMenu();
+    if (!activeDbPath) return;
+    const filename = activeDbPath.split(/[\\/]/).pop();
+    window.location.href = `/sql/download/${filename}`;
+  }
+
+  // Click backdrop to close modals and header menu
   document.addEventListener("click", e => {
     if (e.target.classList.contains("modal-backdrop")) e.target.style.display = "none";
+    const menu = document.getElementById("headerDropdown");
+    if(menu && e.target.closest(".chat-header-right") == null) menu.style.display = "none";
   });
 
   // ── File Upload ────────────────────────────────────────────────────────
@@ -291,8 +361,8 @@ const APP = (() => {
           }
         } else {
           res = await API.uploadFile(pendingFiles[i]);
-          if (res.success || res.table_name) {
-            if (statusEl) statusEl.textContent = `Table · ${res.total_rows} rows`;
+          if (res.success) {
+            if (statusEl) statusEl.textContent = `Saved · click Import to load`;
             successCount++;
           } else {
             if (statusEl) statusEl.textContent = "Failed";
@@ -307,14 +377,11 @@ const APP = (() => {
     pendingFiles.length = 0;
     closeModal("uploadModal");
 
-    // Reconnect agent to current DB so newly uploaded tables are queryable
-    try { await API.loadDb(activeDbPath); } catch {}
-
+    // Refresh KB — files are now in uploads/ but NOT yet imported
     await refreshKnowledgeBase();
-    await loadSchemaPanel();
     if (successCount > 0) {
       toast(`✅ ${successCount} file(s) uploaded!`, "success");
-      UI.addAITextCard(`✅ **${successCount} file(s)** uploaded successfully!\n\n- 📊 **CSV/Excel** → available as SQL tables (use "Query →" in the sidebar)\n- 📄 **PDF/PPTX** → indexed for RAG (use "Ask →" in the sidebar)\n\nYou can now ask questions about your data!`);
+      UI.addAITextCard(`✅ **${successCount} file(s)** uploaded.\n\n- 📊 **CSV/Excel** → click **Import** in the sidebar to load into the database\n- 📄 **PDF/PPTX** → indexed for RAG (use "Ask →" in the sidebar)`);
     }
     if (failCount > 0) toast(`❌ ${failCount} file(s) failed to upload.`, "error");
   }
@@ -404,6 +471,50 @@ const APP = (() => {
     }
   }
 
+  // ── Import CSV/XLSX into DB (explicit, user-triggered) ─────────────────
+  async function importFile(filename) {
+    toast(`Importing ${filename}…`, "info", 2000);
+    try {
+      const res = await fetch(`/file/import/${encodeURIComponent(filename)}`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        toast(`✅ Imported "${data.table_name}" (${data.rows} rows)`, "success");
+        UI.addAITextCard(`✅ **${filename}** imported as table \`${data.table_name}\` (${data.rows} rows, ${data.columns.length} columns).\n\nYou can now query it!`);
+        try { await API.loadDb(activeDbPath); } catch {}
+        await refreshKnowledgeBase();
+        await loadSchemaPanel();
+      } else {
+        toast(`❌ Import failed: ${data.error}`, "error");
+      }
+    } catch (e) {
+      toast(`❌ Import error: ${e.message}`, "error");
+    }
+  }
+
+  // ── Delete knowledge-base item (file / rag doc / database) ─────────────
+  async function deleteItem(type, name) {
+    const labels = { file: "file", rag: "RAG document", db: "database" };
+    const confirmed = confirm(`Delete ${labels[type] || "item"} "${name}"?\nThis will remove the file, any database table, and all embeddings.`);
+    if (!confirmed) return;
+
+    const url = type === "file" ? `/file/delete/${encodeURIComponent(name)}`
+              : type === "rag"  ? `/rag/delete/${encodeURIComponent(name)}`
+              : `/sql/delete-db/${encodeURIComponent(name)}`;
+    try {
+      const res = await fetch(url, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success || data.removed) {
+        toast(`🗑️ "${name}" deleted.`, "success");
+        await refreshKnowledgeBase();
+        await loadSchemaPanel();
+      } else {
+        toast(`❌ Delete failed: ${JSON.stringify(data)}`, "error");
+      }
+    } catch (e) {
+      toast(`❌ Delete error: ${e.message}`, "error");
+    }
+  }
+
   // ── Data Refresh ───────────────────────────────────────────────────────
   async function loadSchemaPanel() {
     try {
@@ -468,8 +579,10 @@ const APP = (() => {
   return {
     newChat, sendQuery, handleKeyDown, autoResize, usePrompt,
     toggleSidebar, toggleRagMode, startRagQuery, exportChat,
+    toggleHeaderMenu, downloadActiveDatabase,
     openModal, closeModal, loadDatabase, switchDatabase, switchDatabaseFromHeader, uploadDatabase, previewSchema, executeSchema,
-    uploadSelectedFiles, loadSchemaPanel, _removeFile, toast,
+    uploadSelectedFiles, loadSchemaPanel, refreshKnowledgeBase, _removeFile, toast,
+    importFile, deleteItem,
   };
 })();
 
@@ -481,7 +594,9 @@ function autoResize(el)         { APP.autoResize(el); }
 function usePrompt(t)           { APP.usePrompt(t); }
 function toggleSidebar()        { APP.toggleSidebar(); }
 function toggleRagMode()        { APP.toggleRagMode(); }
-function exportChat()           { APP.exportChat(); }
+function exportChat(f)          { APP.exportChat(f); }
+function toggleHeaderMenu(e)    { APP.toggleHeaderMenu(e); }
+function downloadActiveDatabase(){ APP.downloadActiveDatabase(); }
 function openModal(id)          { APP.openModal(id); }
 function closeModal(id)         { APP.closeModal(id); }
 function loadDatabase()         { APP.loadDatabase(); }
@@ -491,7 +606,5 @@ function previewSchema()        { APP.previewSchema(); }
 function executeSchema()        { APP.executeSchema(); }
 function uploadSelectedFiles()  { APP.uploadSelectedFiles(); }
 function loadSchemaPanel()      { APP.loadSchemaPanel(); }
-function previewSchema()        { APP.previewSchema(); }
-function executeSchema()        { APP.executeSchema(); }
-function uploadSelectedFiles()  { APP.uploadSelectedFiles(); }
-function loadSchemaPanel()      { APP.loadSchemaPanel(); }
+function importFile(f)          { APP.importFile(f); }
+function deleteItem(t, n)       { APP.deleteItem(t, n); }

@@ -2,9 +2,11 @@
 File to Database Uploader Module
 
 Handles CSV and Excel file uploads. Converts them into SQLite tables
-so the SQL Agent can query them immediately.
+on explicit user request (import_file). Provides unified deletion.
 
-Flow: Upload -> Read with pandas -> Clean column names -> Save to SQLite
+Flow (upload): Upload -> Save raw file only (no auto-import)
+Flow (import): import_file(filename) -> Read -> Clean -> Save to SQLite
+Flow (delete): delete_file(filename) -> Remove file + table + RAG embeddings
 """
 
 import os
@@ -20,23 +22,30 @@ DB_EXTENSIONS = {"db", "sqlite"}
 
 class FileUploader:
     """
-    Reads CSV/Excel files and saves them as SQLite tables.
-    Column names are auto-cleaned to be SQL-safe.
+    Manages raw file uploads, explicit imports to SQLite, and deletions.
+    Column names are auto-cleaned to be SQL-safe on import.
     """
 
-    def __init__(self, upload_folder: str, get_db_path):
+    def __init__(self, upload_folder: str, get_db_path, embeddings_folder: str = None):
         """
         Args:
-            upload_folder: Directory for uploaded files.
-            get_db_path:   Callable returning the current active SQLite database path.
+            upload_folder:     Directory for uploaded files.
+            get_db_path:       Callable returning the current active SQLite database path.
+            embeddings_folder: Directory where RAG .npy/.json files are stored.
         """
-        self.upload_folder = upload_folder
-        self.get_db_path   = get_db_path
+        self.upload_folder     = upload_folder
+        self.get_db_path       = get_db_path
+        self.embeddings_folder = embeddings_folder or os.path.join(
+            os.path.dirname(upload_folder), "embeddings"
+        )
         os.makedirs(upload_folder, exist_ok=True)
+        os.makedirs(self.embeddings_folder, exist_ok=True)
         # Ensure parent of active db exists
         parent = os.path.dirname(get_db_path())
         if parent:
             os.makedirs(parent, exist_ok=True)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
 
     def allowed_file(self, filename: str) -> bool:
         """Returns True if file extension is CSV, XLSX, or XLS."""
@@ -73,7 +82,6 @@ class FileUploader:
             return pd.read_csv(filepath, encoding="utf-8", errors="replace")
 
         elif extension == "xlsx":
-            # Use openpyxl directly to bypass pandas' strict version check
             try:
                 import openpyxl
                 wb = openpyxl.load_workbook(filepath, data_only=True)
@@ -94,23 +102,16 @@ class FileUploader:
 
         raise ValueError(f"Unsupported file type: .{extension}")
 
-
     def save_to_db(self, df: pd.DataFrame, table_name: str):
         """
         Saves a DataFrame as a SQLite table. Replaces existing table.
-
-        Args:
-            df:         DataFrame to save.
-            table_name: Name of the SQLite table.
         """
         conn = sqlite3.connect(self.get_db_path())
         df.to_sql(table_name, conn, if_exists="replace", index=False)
         conn.close()
 
     def list_tables(self) -> list:
-        """
-        Returns a list of all tables in the active database.
-        """
+        """Returns a list of all tables in the active database."""
         try:
             conn = sqlite3.connect(self.get_db_path())
             cursor = conn.cursor()
@@ -121,10 +122,12 @@ class FileUploader:
         except Exception:
             return []
 
+    # ── core actions ──────────────────────────────────────────────────────────
+
     def list_uploaded_files(self) -> list:
         """
-        Returns files present in uploads/ so the sidebar can show the full
-        knowledge base, not only files already indexed or converted.
+        Returns files present in uploads/ with their import status.
+        Does NOT auto-import — import is explicit via import_file().
         """
         tables = set(self.list_tables())
         files = []
@@ -140,15 +143,6 @@ class FileUploader:
                 kind = "table_file"
                 table_name = self.table_name_for_file(filename)
                 imported = table_name in tables
-                if not imported:
-                    try:
-                        df = self.read_file(path, ext)
-                        df = self.clean_column_names(df)
-                        self.save_to_db(df, table_name)
-                        tables.add(table_name)
-                        imported = True
-                    except Exception:
-                        imported = False
             elif ext in RAG_EXTENSIONS:
                 kind = "rag_file"
             elif ext in DB_EXTENSIONS:
@@ -162,89 +156,171 @@ class FileUploader:
             })
         return files
 
+    def import_file(self, filename: str) -> dict:
+        """
+        Explicitly import a raw CSV/XLSX file into the active SQLite database.
+        Returns table info or an error dict.
+        """
+        path = os.path.join(self.upload_folder, filename)
+        if not os.path.isfile(path):
+            return {"success": False, "error": f"File '{filename}' not found."}
+        ext = filename.rsplit(".", 1)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            return {"success": False, "error": f"Unsupported extension '.{ext}'."}
+        try:
+            from modules.system_logger import SystemLogger
+            df = self.read_file(path, ext)
+            df = self.clean_column_names(df)
+            table_name = self.table_name_for_file(filename)
+            self.save_to_db(df, table_name)
+            SystemLogger.log("SUCCESS", "FileUploader", f"Imported '{filename}' -> table '{table_name}' ({len(df)} rows)")
+            return {
+                "success":    True,
+                "filename":   filename,
+                "table_name": table_name,
+                "rows":       len(df),
+                "columns":    list(df.columns),
+                "preview":    df.head(5).fillna("").to_dict(orient="records"),
+            }
+        except Exception as e:
+            try:
+                from modules.system_logger import SystemLogger
+                SystemLogger.log("ERROR", "FileUploader", f"Import failed for '{filename}': {e}")
+            except Exception:
+                pass
+            return {"success": False, "error": str(e)}
+
+    def delete_file(self, filename: str) -> dict:
+        """
+        Unified delete: removes raw file, associated SQLite table, and RAG embeddings.
+        Returns a summary of what was removed.
+        """
+        removed = {"file": False, "table": None, "embeddings": []}
+
+        # 1. Delete raw file
+        path = os.path.join(self.upload_folder, filename)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed["file"] = True
+            except Exception as e:
+                removed["file_error"] = str(e)
+
+        # 2. Drop SQLite table if this was a CSV/XLSX
+        ext = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+        if ext in ALLOWED_EXTENSIONS:
+            table_name = self.table_name_for_file(filename)
+            existing = self.list_tables()
+            if table_name in existing:
+                try:
+                    conn = sqlite3.connect(self.get_db_path())
+                    conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                    conn.commit()
+                    conn.close()
+                    removed["table"] = table_name
+                except Exception as e:
+                    removed["table_error"] = str(e)
+
+        # 3. Remove RAG embedding files (.npy and .json) matching base name
+        base = os.path.splitext(filename)[0]
+        for emb_ext in [".npy", ".json"]:
+            emb_path = os.path.join(self.embeddings_folder, base + emb_ext)
+            if os.path.isfile(emb_path):
+                try:
+                    os.remove(emb_path)
+                    removed["embeddings"].append(base + emb_ext)
+                except Exception:
+                    pass
+
+        try:
+            from modules.system_logger import SystemLogger
+            SystemLogger.log("INFO", "FileUploader", f"Deleted '{filename}': {removed}")
+        except Exception:
+            pass
+
+        return removed
+
 
 class FileRoutes:
     """
     Registers /file/* Flask routes on the app.
 
     Routes:
-        POST /file/upload  -> Upload CSV/Excel -> SQLite table
-        GET  /file/tables  -> List all tables in database
+        POST   /file/upload              -> Save raw file (no auto-import)
+        POST   /file/import/<filename>   -> Import CSV/XLSX into SQLite
+        DELETE /file/delete/<filename>   -> Remove file + table + embeddings
+        GET    /file/tables              -> List all tables in database
+        GET    /file/uploads             -> List all raw uploaded files
     """
 
     def __init__(self, app, uploader: FileUploader):
-        """
-        Args:
-            app:      Flask application instance.
-            uploader: FileUploader instance.
-        """
         self.app      = app
         self.uploader = uploader
 
     def register(self):
-        """Binds routes. Call once at startup."""
-        self.app.add_url_rule("/file/upload", "file_upload", self.upload, methods=["POST"])
-        self.app.add_url_rule("/file/tables", "file_tables", self.tables, methods=["GET"])
-        self.app.add_url_rule("/file/uploads", "file_uploads", self.uploads, methods=["GET"])
+        """Binds all routes. Call once at startup."""
+        self.app.add_url_rule("/file/upload",                  "file_upload",  self.upload,      methods=["POST"])
+        self.app.add_url_rule("/file/import/<filename>",       "file_import",  self.import_file, methods=["POST"])
+        self.app.add_url_rule("/file/delete/<filename>",       "file_delete",  self.delete_file, methods=["DELETE"])
+        self.app.add_url_rule("/file/tables",                  "file_tables",  self.tables,      methods=["GET"])
+        self.app.add_url_rule("/file/uploads",                 "file_uploads", self.uploads,     methods=["GET"])
+
+    # ── route handlers ────────────────────────────────────────────────────────
 
     def upload(self):
         """
         POST /file/upload
-
-        Accepts CSV or Excel file via multipart/form-data (key: 'file').
-        Saves it as a SQLite table named after the filename.
-
-        Returns:
-            JSON: success, table_name, columns, total_rows, preview (5 rows)
+        Accepts CSV/Excel via multipart/form-data (key: 'file').
+        Saves the raw file only — does NOT import to DB automatically.
         """
         if "file" not in request.files:
             return jsonify({"error": "No file. Use key 'file' in form-data."}), 400
-
         file = request.files["file"]
-        if file.filename == "":
+        if not file.filename:
             return jsonify({"error": "No file selected."}), 400
-        if not self.uploader.allowed_file(file.filename):
-            return jsonify({"error": "Only CSV, XLSX, XLS accepted."}), 400
 
-        filename   = secure_filename(file.filename)
-        filepath   = os.path.join(self.uploader.upload_folder, filename)
+        filename = secure_filename(file.filename)
+        ext      = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+
+        # Accept CSV/XLSX/XLS plus RAG files (PDF/PPTX)
+        allowed_all = ALLOWED_EXTENSIONS | RAG_EXTENSIONS | DB_EXTENSIONS
+        if ext not in allowed_all:
+            return jsonify({"error": f"File type '.{ext}' not accepted."}), 400
+
+        filepath = os.path.join(self.uploader.upload_folder, filename)
         file.save(filepath)
-
-        extension  = filename.rsplit(".", 1)[1].lower()
-        table_name = self.uploader.table_name_for_file(filename)
 
         try:
             from modules.system_logger import SystemLogger
-            SystemLogger.log("INFO", "FileUploader", f"Processing '{filename}' -> table '{table_name}'")
-            df      = self.uploader.read_file(filepath, extension)
-            df      = self.uploader.clean_column_names(df)
-            self.uploader.save_to_db(df, table_name)
-            SystemLogger.log("SUCCESS", "FileUploader", f"Saved '{table_name}' ({len(df)} rows, {len(df.columns)} cols)")
-            return jsonify({
-                "success":    True,
-                "message":    f"Saved as table '{table_name}'.",
-                "table_name": table_name,
-                "columns":    list(df.columns),
-                "total_rows": len(df),
-                "preview":    df.head(5).to_dict(orient="records")
-            })
-        except Exception as e:
-            from modules.system_logger import SystemLogger
-            SystemLogger.log("ERROR", "FileUploader", f"Failed to process '{filename}': {e}")
-            return jsonify({"error": str(e)}), 500
+            SystemLogger.log("INFO", "FileUploader", f"Saved raw file '{filename}'")
+        except Exception:
+            pass
+
+        return jsonify({
+            "success":  True,
+            "filename": filename,
+            "message":  "File saved. Use the Import button to load it into the database.",
+            "imported": False,
+        })
+
+    def import_file(self, filename):
+        """POST /file/import/<filename> — Explicitly import to SQLite."""
+        result = self.uploader.import_file(filename)
+        if not result.get("success"):
+            return jsonify(result), 400 if "not found" in result.get("error","") else 500
+        return jsonify(result)
+
+    def delete_file(self, filename):
+        """DELETE /file/delete/<filename> — Unified removal."""
+        removed = self.uploader.delete_file(filename)
+        return jsonify({"success": True, "removed": removed})
 
     def tables(self):
-        """
-        GET /file/tables
-        Returns all table names in the database.
-        """
+        """GET /file/tables — All table names in the active database."""
         tables = self.uploader.list_tables()
         return jsonify({"tables": tables, "count": len(tables)})
 
     def uploads(self):
-        """
-        GET /file/uploads
-        Returns all raw files present in uploads/.
-        """
+        """GET /file/uploads — All raw files in uploads/."""
         files = self.uploader.list_uploaded_files()
         return jsonify({"files": files, "count": len(files)})

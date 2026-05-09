@@ -38,13 +38,21 @@ const UI = (() => {
   function renderChart(elId, chart) {
     const el = document.getElementById(elId);
     if (!el || !chart) return;
-    const layout = Object.assign({
-      paper_bgcolor:"#0B0D12", plot_bgcolor:"#0B0D12",
-      font:{family:"Inter,sans-serif",color:"#94A3B8",size:12},
-      xaxis:{gridcolor:"#2A2D3E"}, yaxis:{gridcolor:"#2A2D3E"},
-      margin:{t:30,r:16,b:40,l:40}, height:240
-    }, chart.layout||{});
-    Plotly.newPlot(el, chart.data||[], layout, {responsive:true, displayModeBar:false});
+    // New: chart is a base64 PNG image
+    if (chart.type === "image" && chart.src) {
+      el.innerHTML = `<img src="${chart.src}" style="width:100%;border-radius:8px;display:block;" alt="Query Chart"/>`;
+      return;
+    }
+    // Legacy Plotly fallback (kept in case old payload arrives)
+    if (typeof Plotly !== "undefined" && chart.data) {
+      const layout = Object.assign({
+        paper_bgcolor:"#0B0D12", plot_bgcolor:"#0B0D12",
+        font:{family:"Inter,sans-serif",color:"#94A3B8",size:12},
+        xaxis:{gridcolor:"#2A2D3E"}, yaxis:{gridcolor:"#2A2D3E"},
+        margin:{t:30,r:16,b:40,l:40}, height:240
+      }, chart.layout||{});
+      Plotly.newPlot(el, chart.data||[], layout, {responsive:true, displayModeBar:false});
+    }
   }
 
   function replaceTypingCard(data) {
@@ -110,25 +118,16 @@ const UI = (() => {
     if (!Object.keys(tables).length) { box.innerHTML=`<p class="muted small">No tables found.</p>`; return; }
     let h = "";
     for (const [t, cols] of Object.entries(tables)) {
-      const showCount = 5;
-      const extra = cols.length - showCount;
-      const rowsHtml = cols.slice(0, showCount).map(c =>
+      const rowsHtml = cols.map(c =>
         `<div class="schema-col-row"><span class="col-name">${esc(c.column)}</span><span class="col-type">${esc(c.type)}</span></div>`
       ).join("");
-      const extraHtml = extra > 0
-        ? `<div class="schema-col-row" style="color:var(--dim);font-size:10px;cursor:pointer" onclick="this.previousSibling && this.parentElement.querySelector('.schema-extra').style.display='block'; this.remove()">
-            +${extra} more columns (click to expand)
-           </div>
-           <div class="schema-extra" style="display:none">${cols.slice(showCount).map(c =>
-             `<div class="schema-col-row"><span class="col-name">${esc(c.column)}</span><span class="col-type">${esc(c.type)}</span></div>`).join("")}</div>`
-        : "";
-      h += `<div class="schema-table-name">
+      h += `<div class="schema-table-name" style="cursor:pointer" onclick="const e=this.nextElementSibling; e.style.display = e.style.display==='none' ? 'block' : 'none';">
         <span class="material-icons-round" style="font-size:14px;color:var(--primary)">table_chart</span>
         ${esc(t)}
-        <button style="margin-left:auto;background:none;border:none;color:var(--primary);font-size:11px;cursor:pointer" onclick="APP.usePrompt('Show me the first 10 records from the ${t} table')">
+        <button style="margin-left:auto;background:none;border:none;color:var(--primary);font-size:11px;cursor:pointer" onclick="event.stopPropagation(); APP.usePrompt('Show me the first 10 records from the ${t} table')">
           Query →
         </button>
-      </div>${rowsHtml}${extraHtml}`;
+      </div><div class="schema-table-cols" style="display:none;">${rowsHtml}</div>`;
     }
     box.innerHTML = h;
   }
@@ -145,6 +144,10 @@ const UI = (() => {
           ${isActive
             ? '<span class="badge-pill" style="background:rgba(5,150,105,0.15);color:var(--success);font-size:9px">ACTIVE</span>'
             : `<button class="rag-query-btn" onclick="APP.switchDatabase('${esc(item.name)}','${esc(item.path)}')" title="Switch">Switch</button>`}
+          <button class="kb-delete-btn" title="Delete database"
+            onclick="APP.deleteItem('db','${esc(item.name)}')">
+            <span class="material-icons-round" style="font-size:13px">delete</span>
+          </button>
         </div>`;
       }).join("") || `<p class="muted small" style="padding:4px 8px">No databases yet.</p>`;
     }
@@ -152,26 +155,30 @@ const UI = (() => {
     const list = document.getElementById("knowledgeBaseList");
     if (!list) return;
 
-    let h = (tables || []).map(t => `<div class="kb-item">
-      <span class="material-icons-round" style="font-size:13px;color:var(--success)">storage</span>
-      <span class="kb-item-name">${esc(t)}</span>
-      <span class="badge-pill badge-table">Table</span>
-      <button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(t)} table')" title="Query">Query</button>
-    </div>`).join("");
-
-    const indexedDocs = new Set(docs || []);
-    h += (uploads || []).map(f => {
+    // Only render uploads — no duplicate table-only entries
+    let h = (uploads || []).map(f => {
       if (f.kind === "table_file") {
+        const importBtn = !f.imported
+          ? `<button class="kb-import-btn" title="Import to database"
+               onclick="APP.importFile('${esc(f.filename)}')">Import</button>`
+          : `<span class="badge-pill badge-table" style="font-size:9px">✓ Imported</span>`;
+        const queryBtn = f.imported
+          ? `<button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(f.table_name)} table')" title="Query">Query</button>`
+          : "";
         return `<div class="kb-item">
-          <span class="material-icons-round" style="font-size:13px;color:var(--success)">table_chart</span>
+          <span class="material-icons-round" style="font-size:13px;color:${f.imported ? "var(--success)" : "#F59E0B"}">table_chart</span>
           <span class="kb-item-name">${esc(f.filename)}</span>
-          <span class="badge-pill badge-table">${f.imported ? "Table" : "CSV/XLSX"}</span>
-          <button class="rag-query-btn" onclick="APP.usePrompt('Show me the first 10 rows of the ${esc(f.table_name)} table')" title="Query">Query</button>
+          ${importBtn}
+          ${queryBtn}
+          <button class="kb-delete-btn" title="Delete file"
+            onclick="APP.deleteItem('file','${esc(f.filename)}')">
+            <span class="material-icons-round" style="font-size:13px">delete</span>
+          </button>
         </div>`;
       }
       if (f.kind === "rag_file") {
         const docName = f.filename.replace(/\.[^.]+$/, "");
-        const indexed = indexedDocs.has(docName);
+        const indexed = (docs || []).includes(docName);
         return `<div class="kb-item">
           <span class="material-icons-round" style="font-size:13px;color:#a78bfa">description</span>
           <span class="kb-item-name">${esc(f.filename)}</span>
@@ -179,20 +186,30 @@ const UI = (() => {
           ${indexed
             ? `<button class="rag-query-btn" onclick="APP.startRagQuery('${esc(docName)}')" title="Ask">Ask</button>`
             : `<span class="muted small" style="margin-left:auto">Not indexed</span>`}
+          <button class="kb-delete-btn" title="Delete document"
+            onclick="APP.deleteItem('rag','${esc(docName)}')">
+            <span class="material-icons-round" style="font-size:13px">delete</span>
+          </button>
         </div>`;
       }
       return "";
     }).join("");
 
+    // Show any RAG-indexed docs that don't have a raw upload entry
     const uploadedDocNames = new Set((uploads || [])
       .filter(f => f.kind === "rag_file")
       .map(f => f.filename.replace(/\.[^.]+$/, "")));
-    h += (docs || []).filter(d => !uploadedDocNames.has(d)).map(d => `<div class="kb-item">
-      <span class="material-icons-round" style="font-size:13px;color:#a78bfa">description</span>
-      <span class="kb-item-name">${esc(d)}</span>
-      <span class="badge-pill badge-rag">RAG</span>
-      <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')" title="Ask">Ask</button>
-    </div>`).join("");
+    h += (docs || []).filter(d => !uploadedDocNames.has(d)).map(d =>
+      `<div class="kb-item">
+        <span class="material-icons-round" style="font-size:13px;color:#a78bfa">description</span>
+        <span class="kb-item-name">${esc(d)}</span>
+        <span class="badge-pill badge-rag">RAG</span>
+        <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')" title="Ask">Ask</button>
+        <button class="kb-delete-btn" title="Delete document"
+          onclick="APP.deleteItem('rag','${esc(d)}')">
+          <span class="material-icons-round" style="font-size:13px">delete</span>
+        </button>
+      </div>`).join("");
 
     list.innerHTML = h || `<p class="muted small" style="padding:4px 8px">No files yet.</p>`;
   }
@@ -211,6 +228,10 @@ const UI = (() => {
         ${indexed
           ? `<button class="rag-query-btn" onclick="APP.startRagQuery('${esc(docName)}')">Ask</button>`
           : `<span class="muted small" style="margin-left:auto">Not indexed</span>`}
+        <button class="kb-delete-btn" title="Delete document"
+          onclick="APP.deleteItem('rag','${esc(docName)}')">
+          <span class="material-icons-round" style="font-size:13px">delete</span>
+        </button>
       </div>`;
     }).join("");
 
@@ -219,6 +240,10 @@ const UI = (() => {
       <span class="material-icons-round" style="font-size:13px">description</span>
       <span>${esc(d)}</span>
       <button class="rag-query-btn" onclick="APP.startRagQuery('${esc(d)}')">Ask</button>
+      <button class="kb-delete-btn" title="Delete document"
+        onclick="APP.deleteItem('rag','${esc(d)}')">
+        <span class="material-icons-round" style="font-size:13px">delete</span>
+      </button>
     </div>`).join("");
 
     box.innerHTML = h || `<p class="muted small">No documents yet.</p>`;

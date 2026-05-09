@@ -62,6 +62,12 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--b
 .sidebar-link-btn { width: 100%; background: none; border: none; color: var(--primary); font-size: 12px; padding: 5px 8px; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 5px; border-radius: 6px; }
 .sidebar-link-btn:hover { background: rgba(37,99,235,.08); }
 
+.kb-import-btn { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: none; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.kb-import-btn:hover { background: rgba(245, 158, 11, 0.25); }
+.kb-delete-btn { background: none; border: none; color: var(--dim); cursor: pointer; padding: 2px; border-radius: 4px; display: flex; align-items: center; transition: color 0.15s, background 0.15s; }
+.kb-delete-btn:hover { color: var(--danger); background: rgba(220, 38, 38, 0.1); }
+
+
 /* DB status */
 .db-status-row { display: flex; align-items: center; gap: 7px; padding: 6px 8px; font-size: 12px; }
 .green-dot { width: 7px; height: 7px; background: var(--success); border-radius: 50%; flex-shrink: 0; }
@@ -122,8 +128,21 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--b
 .copy-btn .material-icons-round { font-size: 14px; }
 
 /* Chart */
-.chart-container { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; background: #0B0D12; }
-.chart-div { width: 100%; min-height: 240px; }
+.chart-container { 
+  border: 1px solid var(--border); 
+  border-radius: 12px; 
+  overflow: hidden; 
+  margin: 16px auto; 
+  background: #0f111a; 
+  max-width: 850px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.chart-div { width: 100%; height: auto; min-height: 300px; display: flex; align-items: center; justify-content: center; }
+.chart-div img { max-width: 100%; max-height: 480px; object-fit: contain; display: block; }
+.chart-div .js-plotly-plot { width: 100% !important; height: 350px !important; }
 
 /* AI card footer */
 .ai-card-footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border); }
